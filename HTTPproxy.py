@@ -18,18 +18,28 @@ def main(addr, port):
     print("Listening to requests")
     while True:
         clientSock, clientAddr= serverSock.accept()
-        thread = Thread(target=DoWork, args=(clientSock,clientAddr))
-        thread.run()
+        thread = Thread(target=ServeRequest, args=(clientSock, clientAddr))
+        thread.start()
 
 
-def DoWork(clientSock, clientAddr):
+def ServeRequest(clientSock, clientAddr):
     print("Client:", clientAddr, "connected")
     msg = clientSock.recv(1024)
+    print(msg.decode())
     parsedInfo = parseHTTPRequest(msg)
     if 'error' not in parsedInfo:
         outBoundRequest = buildRequest(parsedInfo)
+        if outBoundRequest == "400 Bad Request":
+            clientSock.sendall((("HTTP/1.0 " + outBoundRequest + '\r\n\r\n').encode()))
+            clientSock.close()
+            return
         requestSock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        requestSock.connect((parsedInfo['host'], 80))
+        print(parsedInfo['host'])
+        hostInfo = parsedInfo['host'].split(':')
+        if(len(hostInfo) == 2):
+            requestSock.connect((hostInfo[0], int(hostInfo[1])))
+        else:
+            requestSock.connect((hostInfo[0], 80))
         notTimedOut = True
         requestSock.send(outBoundRequest.encode())
         data = []
@@ -48,25 +58,33 @@ def DoWork(clientSock, clientAddr):
         requestSock.close()
 
     else:
-        clientSock.sendall(parsedInfo['error'].encode())
+        clientSock.sendall(("HTTP/1.0 " + parsedInfo['error'] +'\r\n\r\n').encode())
     clientSock.close()
 
 
 
 
 def parseHTTPRequest(request):
+
     #Check if request is a match to regex
     regex = re.compile(requestPattern, re.DOTALL)
     regexMatch = regex.match(request.decode())
     if  regexMatch is not None:
         if 'GET' in regexMatch.group('method'):
-            #Get regex groups and add them to a dictionary containing everything needed to build a request
-            return {'method': regexMatch.group('method'), 'url': urlparse(regexMatch.group('url'))[2], 'version': regexMatch.group('httpV'), 'headers': regexMatch.group('headers'),
-                    'host': urlparse(regexMatch.group('url'))[1]}
+            if regexMatch.group('httpV').split('/')[1] == "1.0":
+                print(regexMatch.group('url'))
+                if re.match(r"^(?:http:\/\/(?:\w+\.)+\w+\/|http:\/\/localhost(?::\d+)?\/)(?:[^\/]+\/)*[^\/]+$", regexMatch.group('url')) is not None:
+                #Get regex groups and add them to a dictionary containing everything needed to build a request
+                    return {'method': regexMatch.group('method'), 'url': urlparse(regexMatch.group('url'))[2], 'version': regexMatch.group('httpV'), 'headers': regexMatch.group('headers'),
+                            'host': urlparse(regexMatch.group('url'))[1]}
+                else:
+                    return {'error' : "400 Bad Request"}
+            else:
+                return {'error': "400 Bad Request"}
         else:
-            return {'error': "501 Not implemented"}
+            return {'error': "501 Not Implemented"}
     else:
-        return {'error': "400 Bad request"}
+        return {'error': "400 Bad Request"}
     # Split the request into lines
 def buildRequest(valid):
     needsConnectionClose = True
@@ -74,9 +92,25 @@ def buildRequest(valid):
     #Add GET / <HTTPVERSION>
     request = "" + valid['method'].strip() + " " + valid['url'].strip() + " " + valid["version"].strip() + "\r\n"
     #Split headers
-    allHeaders = valid["headers"].splitlines()
+    valid['headers'] = valid["headers"].strip('\\r\\n')
+    skippable = ['\r', "\r\n", "", "\n", "\\r\\n"]
+    allHeaders = valid["headers"].split('\\r\\n')
+    headerFormat = r"^[a-zA-Z]+-?[a-zA-Z]*:\s[^\r\n]*$"
+
+    for header in allHeaders:
+        if header in skippable:
+            continue
+        elif not re.match(headerFormat,header):
+            return "400 Bad Request"
+        #splitHeader = header.split()
+    #    if(len(splitHeader) < 2):
+     #       return "400 Bad Request"
+      #  else:
+       #     for x in splitHeader:
+        #        if
     #Check if we need a connection close header and hostname header
     for header in allHeaders:
+        header.split()
         if header.strip() == "Connection: close":
             needsConnectionClose = False
         elif header.strip().startswith("Host") == True:
